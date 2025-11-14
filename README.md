@@ -15,6 +15,10 @@
 
 **AutoGen** is a framework for creating multi-agent AI applications that can act autonomously or work alongside humans.
 
+> **Important:** if you are new to AutoGen, please checkout [Microsoft Agent Framework](https://github.com/microsoft/agent-framework).
+> AutoGen will still be maintained and continue to receive bug fixes and critical security patches.
+> Read our [announcement](https://github.com/microsoft/autogen/discussions/7066).
+
 ## Installation
 
 AutoGen requires **Python 3.10 or later**.
@@ -24,7 +28,7 @@ AutoGen requires **Python 3.10 or later**.
 pip install -U "autogen-agentchat" "autogen-ext[openai]"
 ```
 
-The current stable version is v0.4. If you are upgrading from AutoGen v0.2, please refer to the [Migration Guide](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/migration-guide.html) for detailed instructions on how to update your code and configurations.
+The current stable version can be found in the [releases](https://github.com/microsoft/autogen/releases). If you are upgrading from AutoGen v0.2, please refer to the [Migration Guide](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/migration-guide.html) for detailed instructions on how to update your code and configurations.
 
 ```bash
 # Install AutoGen Studio for no-code GUI
@@ -32,6 +36,8 @@ pip install -U "autogenstudio"
 ```
 
 ## Quickstart
+
+The following samples call OpenAI API, so you first need to create an account and export your key as `export OPENAI_API_KEY="sk-..."`.
 
 ### Hello World
 
@@ -43,7 +49,7 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 async def main() -> None:
-    model_client = OpenAIChatCompletionClient(model="gpt-4o")
+    model_client = OpenAIChatCompletionClient(model="gpt-4.1")
     agent = AssistantAgent("assistant", model_client=model_client)
     print(await agent.run(task="Say 'Hello World!'"))
     await model_client.close()
@@ -89,6 +95,58 @@ asyncio.run(main())
 
 > **Warning**: Only connect to trusted MCP servers as they may execute commands
 > in your local environment or expose sensitive information.
+
+### Multi-Agent Orchestration
+
+You can use `AgentTool` to create a basic multi-agent orchestration setup.
+
+```python
+import asyncio
+
+from autogen_agentchat.agents import AssistantAgent
+from autogen_agentchat.tools import AgentTool
+from autogen_agentchat.ui import Console
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+
+
+async def main() -> None:
+    model_client = OpenAIChatCompletionClient(model="gpt-4.1")
+
+    math_agent = AssistantAgent(
+        "math_expert",
+        model_client=model_client,
+        system_message="You are a math expert.",
+        description="A math expert assistant.",
+        model_client_stream=True,
+    )
+    math_agent_tool = AgentTool(math_agent, return_value_as_last_message=True)
+
+    chemistry_agent = AssistantAgent(
+        "chemistry_expert",
+        model_client=model_client,
+        system_message="You are a chemistry expert.",
+        description="A chemistry expert assistant.",
+        model_client_stream=True,
+    )
+    chemistry_agent_tool = AgentTool(chemistry_agent, return_value_as_last_message=True)
+
+    agent = AssistantAgent(
+        "assistant",
+        system_message="You are a general assistant. Use expert tools when needed.",
+        model_client=model_client,
+        model_client_stream=True,
+        tools=[math_agent_tool, chemistry_agent_tool],
+        max_tool_iterations=10,
+    )
+    await Console(agent.run_stream(task="What is the integral of x^2?"))
+    await Console(agent.run_stream(task="What is the molecular weight of water?"))
+
+
+asyncio.run(main())
+```
+
+For more advanced multi-agent orchestrations and workflows, read
+[AgentChat documentation](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/index.html).
 
 ### AutoGen Studio
 
