@@ -5,65 +5,67 @@ The EvaluatorAgent analyzes Turing Test conversations and provides detailed
 assessments of performance, authenticity, and discriminability.
 """
 
-from typing import Any, Dict, List, Optional, Sequence, Union, Tuple
-import asyncio
-import logging
-from datetime import datetime
 import json
+import logging
+import re
 import statistics
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.base import Response
-from autogen_agentchat.messages import ChatMessage, TextMessage
+from autogen_agentchat.messages import TextMessage
+from autogen_core import CancellationToken
 from autogen_core.models import ChatCompletionClient
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class TuringTestResult:
     """Structured result from a Turing Test evaluation."""
-    
+
     # Basic test info
     test_id: str
     timestamp: str
     interrogator_verdict: str  # "HUMAN" or "AI"
     actual_type: str  # "human" or "ai"
     correct_identification: bool
-    
+
     # Performance metrics
     confidence_score: float  # 0-1
-    conversation_quality: float  # 0-1  
+    conversation_quality: float  # 0-1
     authenticity_score: float  # 0-1
     response_consistency: float  # 0-1
-    
+
     # Conversation data
     total_rounds: int
     average_response_time: float
     conversation_duration: float
     temperature: Optional[float]
-    
+
     # Analysis details
     key_indicators: List[str]
     failure_points: List[str]
     evaluator_notes: str
 
+
 class EvaluatorAgent(AssistantAgent):
     """
     An agent that evaluates Turing Test conversations and provides detailed analysis.
     """
-    
+
     def __init__(
         self,
         name: str,
         model_client: ChatCompletionClient,
         evaluation_criteria: Optional[Dict[str, float]] = None,
         system_message: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Initialize the EvaluatorAgent.
-        
+
         Args:
             name: Agent name
             model_client: Chat completion client
@@ -71,60 +73,63 @@ class EvaluatorAgent(AssistantAgent):
             system_message: Custom system prompt for evaluation
             **kwargs: Additional arguments passed to AssistantAgent
         """
-        
-        self.evaluation_criteria = evaluation_criteria or self._default_evaluation_criteria()
-        
+
+        self.evaluation_criteria = (
+            evaluation_criteria or self._default_evaluation_criteria()
+        )
+
         if system_message is None:
             system_message = self._create_evaluation_system_message()
-        
+
         super().__init__(
             name=name,
             model_client=model_client,
             system_message=system_message,
-            **kwargs
+            **kwargs,
         )
-        
-        self.evaluation_history = []
-    
+
+        self.evaluation_history: List[TuringTestResult] = []
+
     async def evaluate_conversation(
         self,
         interrogator_data: Dict[str, Any],
         subject_data: Dict[str, Any],
         actual_subject_type: str,
-        test_id: Optional[str] = None
+        test_id: Optional[str] = None,
     ) -> TuringTestResult:
         """
         Evaluate a complete Turing Test conversation.
-        
+
         Args:
             interrogator_data: Data from InterrogatorAgent.get_conversation_data()
             subject_data: Data from SubjectAgent.get_performance_metrics()
-            actual_subject_type: "human" or "ai" 
+            actual_subject_type: "human" or "ai"
             test_id: Optional test identifier
-            
+
         Returns:
             TuringTestResult with detailed analysis
         """
-        
+
         if test_id is None:
             test_id = f"turing_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         # Extract key metrics
         conversation_log = interrogator_data.get("conversation_log", [])
         interrogator_verdict = self._extract_verdict(conversation_log)
         correct_identification = (
-            (interrogator_verdict == "HUMAN" and actual_subject_type == "human") or
-            (interrogator_verdict == "AI" and actual_subject_type == "ai")
-        )
-        
+            interrogator_verdict == "HUMAN" and actual_subject_type == "human"
+        ) or (interrogator_verdict == "AI" and actual_subject_type == "ai")
+
         # Calculate performance scores
-        scores = await self._calculate_performance_scores(interrogator_data, subject_data)
-        
+        scores = await self._calculate_performance_scores(
+            interrogator_data, subject_data
+        )
+
         # Generate detailed analysis
         analysis = await self._generate_detailed_analysis(
             interrogator_data, subject_data, actual_subject_type, interrogator_verdict
         )
-        
+
         result = TuringTestResult(
             test_id=test_id,
             timestamp=datetime.now().isoformat(),
@@ -141,15 +146,15 @@ class EvaluatorAgent(AssistantAgent):
             temperature=subject_data.get("temperature"),
             key_indicators=analysis["key_indicators"],
             failure_points=analysis["failure_points"],
-            evaluator_notes=analysis["notes"]
+            evaluator_notes=analysis["notes"],
         )
-        
+
         self.evaluation_history.append(result)
         return result
-    
-    def _extract_verdict(self, conversation_log: List[Dict]) -> str:
+
+    def _extract_verdict(self, conversation_log: List[Dict[str, Any]]) -> str:
         """Extract the interrogator's final verdict from conversation log."""
-        
+
         # Look for final assessment in the last few messages
         for entry in reversed(conversation_log[-5:]):
             if "interrogator_question" in entry:
@@ -158,29 +163,27 @@ class EvaluatorAgent(AssistantAgent):
                     # Look for explicit verdict patterns
                     if content.find("HUMAN") < content.find("AI"):
                         return "HUMAN"
-                    else:
-                        return "AI"
+                    return "AI"
                 elif "HUMAN" in content:
                     return "HUMAN"
                 elif "AI" in content:
                     return "AI"
-        
+
         return "UNCLEAR"
-    
+
     async def _calculate_performance_scores(
-        self, 
-        interrogator_data: Dict[str, Any], 
-        subject_data: Dict[str, Any]
+        self, interrogator_data: Dict[str, Any], subject_data: Dict[str, Any]
     ) -> Dict[str, float]:
         """Calculate numerical performance scores."""
-        
+
         # Create prompt for LLM-based scoring
-        scoring_prompt = f"""Analyze this Turing Test conversation and provide numerical scores (0.0-1.0) for each dimension:
+        scoring_prompt = f"""Analyze this Turing Test conversation and provide
+numerical scores (0.0-1.0) for each dimension:
 
 INTERROGATOR DATA:
 {json.dumps(interrogator_data, indent=2)}
 
-SUBJECT DATA:  
+SUBJECT DATA:
 {json.dumps(subject_data, indent=2)}
 
 Score each dimension from 0.0 (poor) to 1.0 (excellent):
@@ -191,56 +194,67 @@ Score each dimension from 0.0 (poor) to 1.0 (excellent):
 4. CONSISTENCY: How consistent were the subject's responses?
 
 Return ONLY a JSON object with the scores:
-{{"confidence": 0.0, "quality": 0.0, "authenticity": 0.0, "consistency": 0.0}}"""
+{{"confidence": 0.0, "quality": 0.0, "authenticity": 0.0,
+"consistency": 0.0}}"""
 
         # Use the model to generate scores
         messages = [TextMessage(content=scoring_prompt, source=self.name)]
-        response = await super().on_messages(messages, None)
-        
+        cancellation_token = CancellationToken()
+        response = await super().on_messages(messages, cancellation_token)
+
         try:
             # Parse JSON response
-            scores_text = response.chat_message.content
+            msg_content = (
+                response.chat_message.content
+                if hasattr(response.chat_message, "content")
+                else str(response.chat_message)
+            )
+            scores_text = str(msg_content)
             # Extract JSON from response (handle case where LLM adds explanation)
-            import re
-            json_match = re.search(r'\{[^}]+\}', scores_text)
+            json_match = re.search(r"\{[^}]+\}", scores_text)
             if json_match:
                 scores = json.loads(json_match.group())
                 # Validate scores are in 0-1 range
                 for key, value in scores.items():
                     scores[key] = max(0.0, min(1.0, float(value)))
                 return scores
-        except (json.JSONDecodeError, ValueError, KeyError) as e:
-            logger.warning(f"Failed to parse LLM scores: {e}")
-        
+        except (json.JSONDecodeError, ValueError, KeyError) as err:
+            logger.warning("Failed to parse LLM scores: %s", err)
+
         # Fallback to heuristic scoring
         return self._heuristic_scoring(interrogator_data, subject_data)
-    
-    def _heuristic_scoring(self, interrogator_data: Dict, subject_data: Dict) -> Dict[str, float]:
+
+    def _heuristic_scoring(
+        self, interrogator_data: Dict[str, Any], subject_data: Dict[str, Any]
+    ) -> Dict[str, float]:
         """Fallback heuristic scoring if LLM scoring fails."""
-        
+
         total_rounds = interrogator_data.get("total_rounds", 1)
         avg_response_time = subject_data.get("average_response_time", 0)
         conversation_duration = interrogator_data.get("duration_seconds", 0)
-        
+
         # Simple heuristic scoring
         scores = {
-            "confidence": min(1.0, total_rounds / 10.0),  # More rounds = more confident
-            "quality": min(1.0, conversation_duration / 300.0),  # Longer conversation = better quality
-            "authenticity": max(0.3, min(1.0, 1.0 - abs(avg_response_time - 2.0) / 5.0)),  # ~2 sec optimal
-            "consistency": 0.7  # Default neutral score
+            # More rounds = more confident
+            "confidence": min(1.0, total_rounds / 10.0),
+            # Longer conversation = better quality
+            "quality": min(1.0, conversation_duration / 300.0),
+            # ~2 sec optimal
+            "authenticity": max(0.3, min(1.0, 1.0 - abs(avg_response_time - 2.0) / 5.0)),
+            "consistency": 0.7,  # Default neutral score
         }
-        
+
         return scores
-    
+
     async def _generate_detailed_analysis(
         self,
         interrogator_data: Dict[str, Any],
-        subject_data: Dict[str, Any], 
+        subject_data: Dict[str, Any],
         actual_type: str,
-        verdict: str
+        verdict: str,
     ) -> Dict[str, Any]:
         """Generate detailed qualitative analysis."""
-        
+
         analysis_prompt = f"""Analyze this Turing Test conversation in detail:
 
 ACTUAL SUBJECT TYPE: {actual_type}
@@ -267,46 +281,70 @@ Focus on:
 4. What could improve future performance?"""
 
         messages = [TextMessage(content=analysis_prompt, source=self.name)]
-        response = await super().on_messages(messages, None)
-        
+        cancellation_token = CancellationToken()
+        response = await super().on_messages(messages, cancellation_token)
+
         try:
             # Parse JSON response
-            analysis_text = response.chat_message.content
-            import re
-            json_match = re.search(r'\{.*\}', analysis_text, re.DOTALL)
+            msg_content = (
+                response.chat_message.content
+                if hasattr(response.chat_message, "content")
+                else str(response.chat_message)
+            )
+            analysis_text = str(msg_content)
+            json_match = re.search(r"\{.*\}", analysis_text, re.DOTALL)
             if json_match:
                 analysis = json.loads(json_match.group())
                 return analysis
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse LLM analysis: {e}")
-        
+        except (json.JSONDecodeError, ValueError) as err:
+            logger.warning("Failed to parse LLM analysis: %s", err)
+
         # Fallback analysis
         return {
-            "key_indicators": ["Response patterns", "Conversation style", "Knowledge depth"],
+            "key_indicators": [
+                "Response patterns",
+                "Conversation style",
+                "Knowledge depth",
+            ],
             "failure_points": ["Unable to generate detailed analysis"],
-            "notes": f"Verdict: {verdict}, Actual: {actual_type}. Automated analysis failed."
+            "notes": (
+                f"Verdict: {verdict}, Actual: {actual_type}. "
+                "Automated analysis failed."
+            ),
         }
-    
+
     def get_evaluation_summary(self) -> Dict[str, Any]:
         """Get summary statistics across all evaluations."""
-        
+
         if not self.evaluation_history:
             return {"total_evaluations": 0}
-        
+
         total_tests = len(self.evaluation_history)
-        correct_identifications = sum(1 for r in self.evaluation_history if r.correct_identification)
+        correct_identifications = sum(
+            1 for r in self.evaluation_history if r.correct_identification
+        )
         accuracy = correct_identifications / total_tests
-        
+
         # Calculate average scores
-        avg_confidence = statistics.mean([r.confidence_score for r in self.evaluation_history])
-        avg_quality = statistics.mean([r.conversation_quality for r in self.evaluation_history])
-        avg_authenticity = statistics.mean([r.authenticity_score for r in self.evaluation_history])
-        avg_consistency = statistics.mean([r.response_consistency for r in self.evaluation_history])
-        
+        avg_confidence = statistics.mean(
+            [r.confidence_score for r in self.evaluation_history]
+        )
+        avg_quality = statistics.mean(
+            [r.conversation_quality for r in self.evaluation_history]
+        )
+        avg_authenticity = statistics.mean(
+            [r.authenticity_score for r in self.evaluation_history]
+        )
+        avg_consistency = statistics.mean(
+            [r.response_consistency for r in self.evaluation_history]
+        )
+
         # Performance by type
-        human_tests = [r for r in self.evaluation_history if r.actual_type == "human"]
+        human_tests = [
+            r for r in self.evaluation_history if r.actual_type == "human"
+        ]
         ai_tests = [r for r in self.evaluation_history if r.actual_type == "ai"]
-        
+
         return {
             "total_evaluations": total_tests,
             "overall_accuracy": accuracy,
@@ -315,13 +353,22 @@ Focus on:
                 "confidence": avg_confidence,
                 "quality": avg_quality,
                 "authenticity": avg_authenticity,
-                "consistency": avg_consistency
+                "consistency": avg_consistency,
             },
             "performance_by_type": {
                 "human_tests": len(human_tests),
                 "ai_tests": len(ai_tests),
-                "human_accuracy": sum(1 for r in human_tests if r.correct_identification) / len(human_tests) if human_tests else 0,
-                "ai_accuracy": sum(1 for r in ai_tests if r.correct_identification) / len(ai_tests) if ai_tests else 0
+                "human_accuracy": (
+                    sum(1 for r in human_tests if r.correct_identification)
+                    / len(human_tests)
+                    if human_tests
+                    else 0
+                ),
+                "ai_accuracy": (
+                    sum(1 for r in ai_tests if r.correct_identification) / len(ai_tests)
+                    if ai_tests
+                    else 0
+                ),
             },
             "evaluation_history": [
                 {
@@ -329,29 +376,33 @@ Focus on:
                     "timestamp": r.timestamp,
                     "correct": r.correct_identification,
                     "confidence": r.confidence_score,
-                    "temperature": r.temperature
+                    "temperature": r.temperature,
                 }
                 for r in self.evaluation_history
-            ]
+            ],
         }
-        
+
     def _default_evaluation_criteria(self) -> Dict[str, float]:
         """Default weights for evaluation criteria."""
         return {
-            "authenticity": 0.3,      # How authentic/natural responses seem
-            "consistency": 0.2,       # Internal consistency of responses
-            "depth": 0.2,            # Depth and nuance of responses
-            "spontaneity": 0.15,     # Natural spontaneity vs robotic patterns
-            "cultural_knowledge": 0.15 # Demonstration of lived cultural experience
+            "authenticity": 0.3,  # How authentic/natural responses seem
+            "consistency": 0.2,  # Internal consistency of responses
+            "depth": 0.2,  # Depth and nuance of responses
+            "spontaneity": 0.15,  # Natural spontaneity vs robotic patterns
+            "cultural_knowledge": 0.15,  # Demonstration of lived cultural experience
         }
-    
+
     def _create_evaluation_system_message(self) -> str:
         """Create system message for evaluation."""
-        
-        criteria_text = "\n".join([f"- {k.replace('_', ' ').title()}: {v*100}%" 
-                                  for k, v in self.evaluation_criteria.items()])
-        
-        return f"""You are an expert evaluator analyzing Turing Test conversations. Your role is to provide objective, detailed analysis of human vs AI identification accuracy and conversation quality.
+
+        criteria_text = "\n".join(
+            f"- {k.replace('_', ' ').title()}: {v*100}%"
+            for k, v in self.evaluation_criteria.items()
+        )
+
+        return f"""You are an expert evaluator analyzing Turing Test conversations.
+Your role is to provide objective, detailed analysis of human vs AI
+identification accuracy and conversation quality.
 
 EVALUATION FRAMEWORK:
 {criteria_text}
