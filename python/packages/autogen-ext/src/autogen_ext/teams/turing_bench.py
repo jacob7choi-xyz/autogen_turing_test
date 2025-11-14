@@ -17,7 +17,7 @@ import csv
 from autogen_agentchat.teams import RoundRobinGroupChat
 from autogen_agentchat.base import TaskResult
 from autogen_agentchat.messages import TextMessage
-from autogen_agentchat.conditions import MaxMessageCondition
+from autogen_agentchat.conditions import MaxMessageTermination
 from autogen_core.models import ChatCompletionClient
 
 # Import our Turing Test agents (assuming they're in the same autogen_ext package)
@@ -277,25 +277,23 @@ class TuringTestTeam:
             )
     
     async def _run_conversation(
-        self, 
-        interrogator: InterrogatorAgent, 
+        self,
+        interrogator: InterrogatorAgent,
         subject: SubjectAgent,
         test_id: str
     ) -> Dict[str, Any]:
         """Run the actual conversation between interrogator and subject."""
-        
-        # Create team for conversation
-        team = RoundRobinGroupChat([interrogator, subject])
-        
+
+        # Create team for conversation with termination condition
+        termination = MaxMessageTermination(max_messages=self.max_rounds * 2)
+        team = RoundRobinGroupChat([interrogator, subject], termination_condition=termination)
+
         # Initial message to start conversation
         initial_task = "Begin the Turing Test conversation. Interrogator, please start with your first question."
-        
+
         try:
             # Run conversation with message limit
-            result = await team.run(
-                task=initial_task,
-                termination_condition=MaxMessageCondition(max_messages=self.max_rounds * 2)
-            )
+            result = await team.run(task=initial_task)
             
             return {
                 "status": "completed",
